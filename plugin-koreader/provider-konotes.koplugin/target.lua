@@ -192,7 +192,10 @@ function KonotesExporter:export(t)
     local exported = 0
     local unsupported = 0
     local failures = {}
-    for _, booknotes in ipairs(t) do
+    -- NOTE: never name a loop variable "_": it shadows gettext's `_` and the
+    -- next gettext call inside the loop crashes (seen as
+    -- "attempt to call local '_' (a number value)" in crash.log).
+    for _bookno, booknotes in ipairs(t) do
         local payload, skipped = Payload.fromBooknotes(booknotes, self:getDeviceName())
         unsupported = unsupported + (skipped or 0)
         local ok, err = self:postBook(base_url, payload)
@@ -204,16 +207,18 @@ function KonotesExporter:export(t)
     end
 
     if #failures == 0 then
-        UIManager:show(InfoMessage:new {
-            text = T(_("koNotes: %1 of %2 books synced successfully."), exported, #t),
-        })
+        local message = T(_("koNotes: %1 of %2 books synced successfully."), exported, #t)
+        if unsupported > 0 then
+            message = message .. "\n" .. T(_("%1 unsupported marks were skipped (image highlights or empty)."), unsupported)
+        end
+        UIManager:show(InfoMessage:new { text = message })
         logger.dbg("koNotes: exported books:", exported, "unsupported marks skipped:", unsupported)
     else
         UIManager:show(InfoMessage:new {
             text = T(_("koNotes: %1 books synced, %2 failed.\n\nFailed:\n%3"), exported, #failures,
                 table.concat(failures, "\n")),
         })
-        for _, message in ipairs(failures) do
+        for _i, message in ipairs(failures) do
             logger.warn("koNotes failed book:", message)
         end
     end

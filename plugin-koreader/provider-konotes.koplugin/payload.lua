@@ -45,7 +45,11 @@ local function skip(clipping, text, note)
 end
 
 function Payload.fromBooknotes(booknotes, device_name)
-    local annotations = {}
+    -- __jsontype = "array": rapidjson must encode this as a JSON array even when
+    -- empty (a Lua empty table is otherwise serialized as an object, which
+    -- Obsidian's validator rejects — the exact failure when every highlight
+    -- of a book has just been deleted).
+    local annotations = setmetatable({}, { __jsontype = "array" })
     local skipped = 0
 
     for _, entry in ipairs(booknotes) do
@@ -69,10 +73,14 @@ function Payload.fromBooknotes(booknotes, device_name)
         end
     end
 
+    -- KOReader separates multi-author doc props with newlines; upper user cases
+    -- end with an extraneous newline (hence trim *before* separator), and a
+    -- single comma-separated line keeps frontmatter/YAML-safe rendering.
+    local author = trim(booknotes.author):gsub("[\r\n]+", ", "):gsub("%s+", " ")
     local book = {
         path = booknotes.file or ("myclippings/" .. tostring(booknotes.title or "unknown")),
         title = tostring(booknotes.title or "Unknown Book"),
-        author = tostring(booknotes.author or ""),
+        author = author,
     }
     if type(booknotes.number_of_pages) == "number" then
         book.pages = booknotes.number_of_pages

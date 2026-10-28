@@ -84,7 +84,35 @@ local payload2 = Payload.fromBooknotes({
 }, "Vivlio InkPad 4")
 check(payload2.book.path == "myclippings/An Imported Book", "synthetic path for bookless clippings, got " .. tostring(payload2.book.path))
 
--- ---- time fallback: no time field ⇒ os.time() (sanity: still parseable format) ----
+-- ---- regression: crash.log 2026-10-28 — author doc props separated by "\n" ----
+local payload4 = Payload.fromBooknotes({
+    file = "/books/ddia.epub",
+    title = "DDIA",
+    author = "Martin Kleppmann\nChris Riccomini",
+    [1] = { { page = 10, time = now, text = "There are hundreds of databases to choose from." } },
+}, "PBVerseProColor")
+check(payload4.book.author == "Martin Kleppmann, Chris Riccomini", "multi-author newline normalized, got " .. tostring(payload4.book.author))
+local payload4b = Payload.fromBooknotes({
+    file = "/books/x.epub", title = "X", author = "Solo Author\n", [1] = { { page = 1, text = "hello", time = now } },
+}, "Vivlio InkPad 4")
+check(payload4b.book.author == "Solo Author", "trailing author newline dropped, got " .. tostring(payload4b.book.author))
+
+-- ---- regression: crash.log 2026-10-28 — empty annotations must stay a JSON array ----
+local deleted = { file = "/books/ddia.epub", title = "DDIA", author = "Martin Kleppmann" }
+local payload4d, newskipped = Payload.fromBooknotes(deleted, "PBVerseProColor")
+check(type(payload4d.annotations) == "table" and #payload4d.annotations == 0, "deleted-all book yields empty annotations")
+check(getmetatable(payload4d.annotations) ~= nil and getmetatable(payload4d.annotations).__jsontype == "array",
+    "annotations tagged as JSON array for rapidjson")
+check(newskipped == 0, "empty book skipped count 0, got " .. tostring(newskipped))
+-- non-empty case must carry the metatable too (rapidjson honours it on every path)
+check(getmetatable(payload.annotations) ~= nil and getmetatable(payload.annotations).__jsontype == "array",
+    "non-empty annotations also tagged as array")
+
+-- ---- regression: crash.log 2026-10-28 — mixed separators collapse cleanly ----
+local payload5 = Payload.fromBooknotes({
+    file = "/books/x.epub", title = "X", author = "A\r\nB", [1] = { { page = 1, text = "hello", time = now } },
+}, "Vivlio InkPad 4")
+check(payload5.book.author == "A, B", "CRLF author separator normalized, got " .. tostring(payload5.book.author))
 local payload3 = Payload.fromBooknotes({
     file = "/books/x.epub", title = "X", author = "", [1] = { { page = 1, text = "hello" } },
 }, "Vivlio InkPad 4")
