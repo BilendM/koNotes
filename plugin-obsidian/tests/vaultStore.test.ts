@@ -105,9 +105,11 @@ const OPTIONS: VaultOptions = { noteFolder: "KOReader", filenameTemplate: "{{aut
 const baseName = "KOReader/Gabriel Wyner - Fluent Forever.md";
 
 describe("VaultNoteStore semantics", () => {
-	it("creates, then no-ops, then updates while preserving manual content", async () => {
+	// NOTE: a real (advancing) clock is used on purpose — a fixed clock hides
+	// `last_synced` drift and would have masked the no-op guard regression fixed here.
+	it("creates, then no-ops (advancing clock), then updates while preserving manual content", async () => {
 		const vault = new FakeVault();
-		const store = new VaultNoteStore(vault.app(), OPTIONS, () => new Date("2026-10-28T12:00:00.000Z"));
+		const store = new VaultNoteStore(vault.app(), OPTIONS, () => new Date());
 
 		const created = await store.sync(payload());
 		expect(created).toEqual({ action: "created", path: baseName });
@@ -132,6 +134,11 @@ describe("VaultNoteStore semantics", () => {
 		expect(next).toContain("Extra highlight");
 		expect(next).toContain("highlights: 4");
 		expect(next).toContain(MANUAL_START + "\nRe: reflections about ch. 1\nkept verbatim\n" + MANUAL_END);
+
+		// hash-based guard: unchanged payload + user-edited manual block ⇒ no write
+		const afterManualEdit = await store.sync(payload(true));
+		expect(afterManualEdit.action).toBe("unchanged");
+		expect(vault.content(baseName)).toBe(next);
 	});
 
 	it("regenerates and keeps a renamed note in sync", async () => {

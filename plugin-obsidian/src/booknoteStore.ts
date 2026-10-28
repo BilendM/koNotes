@@ -1,7 +1,7 @@
 import { normalizePath, TFile, type TFolder, type App } from "obsidian";
 import type { KoNotesPayload, NoteStore, SyncResult } from "./protocol";
 import { renderNote, extractManualBlock } from "./markdown";
-import { noteFileName, sourceKey } from "./noteutils";
+import { noteFileName, payloadHash, sourceKey } from "./noteutils";
 
 export interface VaultOptions {
 	/** vault folder notes live in, e.g. "KOReader" */
@@ -34,7 +34,15 @@ export class VaultNoteStore implements NoteStore {
 
 		const old = await this.app.vault.read(note);
 		const next = renderNote(payload, extractManualBlock(old), this.now());
-		if (old === next) return { action: "unchanged", path: note.path };
+		// Unchanged iff the incoming payload hash matches the note's frontmatter hash.
+		// (Pure content comparison can't work: `last_synced` drifts on every render.)
+		// Fallback for notes without a hash: content comparison (deterministic apart from
+		// `last_synced`), which the first regeneration then fixes by adding the hash.
+		const fm = this.app.metadataCache.getFileCache(note)?.frontmatter;
+		const savedHash = fm && typeof fm["payload_hash"] === "string" ? fm["payload_hash"] : null;
+		if (savedHash !== null ? savedHash === payloadHash(payload) : old === next) {
+			return { action: "unchanged", path: note.path };
+		}
 		await this.app.vault.process(note, () => next);
 		return { action: "updated", path: note.path };
 	}
