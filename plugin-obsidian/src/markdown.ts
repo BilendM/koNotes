@@ -33,19 +33,37 @@ function calloutBody(text: string): string {
 	return lines.map((l) => (l === "" ? ">" : "> " + l)).join("\n");
 }
 
+/** Vault-local overrides from a note's frontmatter (absent keys ⇒ no override). */
+export function readOverrides(fm: Record<string, unknown> | undefined | null): DisplayOverrides {
+	const out: DisplayOverrides = {};
+	const title = fm?.["title_override"];
+	const author = fm?.["author_override"];
+	if (typeof title === "string" && title.trim() !== "") out.title = title;
+	if (typeof author === "string" && author.trim() !== "") out.author = author;
+	return out;
+}
+
 /**
  * Deterministic note body for a sync payload (M1 semantics: full regeneration).
  * `manual` is user-owned content preserved verbatim; `now` isolates timestamps for tests.
+ * `overrides` are vault-local display corrections (frontmatter round-trips through
+ * here — they never reach the wire and never affect payload_hash).
  */
-export function renderNote(payload: KoNotesPayload, manual?: string, now: Date = new Date()): string {
+export type DisplayOverrides = { title?: string | null; author?: string | null };
+
+export function renderNote(payload: KoNotesPayload, manual?: string, now: Date = new Date(), overrides?: DisplayOverrides): string {
 	const b = payload.book;
 	const percent = b.percent_finished !== undefined ? Math.round(b.percent_finished * 100) : undefined;
+	const title = overrides?.title?.trim() || b.title;
+	const author = overrides?.author !== undefined && overrides?.author !== null ? overrides.author.trim() : b.author;
 
 	const fm: string[] = [
 		"book: " + yamlString(b.title),
 		"author: " + yamlString(b.author),
 		"source: " + yamlString(sourceKey(b)),
 	];
+	if (overrides?.title?.trim()) fm.push("title_override: " + yamlString(overrides.title.trim()));
+	if (overrides?.author !== undefined && overrides?.author !== null) fm.push("author_override: " + yamlString(overrides.author.trim()));
 	if (b.pages !== undefined) fm.push("pages: " + b.pages);
 	if (percent !== undefined) fm.push("percent_read: " + percent);
 	if (payload.device.name) fm.push("device: " + yamlString(payload.device.name));
@@ -54,8 +72,8 @@ export function renderNote(payload: KoNotesPayload, manual?: string, now: Date =
 	fm.push("payload_hash: " + JSON.stringify(payloadHash(payload)));
 	fm.push("kosync_version: " + String(VER));
 
-	const body: string[] = [`# ${b.title}`];
-	if (b.author.trim()) body.push(`*${b.author.trim()}*`);
+	const body: string[] = [`# ${title}`];
+	if (author.trim()) body.push(`*${author.trim()}*`);
 
 	// exactly one blank line between blocks
 	const ensureGap = () => {

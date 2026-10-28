@@ -59,6 +59,10 @@ class FakeVault {
 		if (!this.#files.has(p)) throw new Error("no such file " + p);
 		return this.#files.get(p) as string;
 	}
+	set(p: string, content: string): void {
+		if (!this.#files.has(p)) throw new Error("no such file " + p);
+		this.#files.set(p, content);
+	}
 	app(): App {
 		const vault = {
 			getFileByPath: (p: string) => this.file(p),
@@ -77,6 +81,7 @@ class FakeVault {
 				return f;
 			},
 			read: async (f: TFile) => this.content(f.path),
+			rename: async (f: TFile, to: string) => this.rename(f.path, to),
 			process: async (f: TFile, fn: (data: string) => string) => {
 				const next = fn(this.content(f.path));
 				this.#files.set(f.path, next);
@@ -158,4 +163,52 @@ describe("VaultNoteStore semantics", () => {
 		// no duplicate note was created
 		expect(vault.paths()).toEqual([renamed]);
 	});
+
+	it("applies a title override: H1, frontmatter and filename change, identity stays", async () => {
+		const vault = new FakeVault();
+		const store = new VaultNoteStore(vault.app(), OPTIONS, () => new Date("2026-10-28T12:00:00.000Z"));
+
+		await store.sync(payload());
+		// exactly what the "Set display title…" command does
+		writeFrontmatterField(vault, baseName, "title_override", "Designing Data-Intensive Applications");
+
+		const out = await store.syncDetailed(payload());
+		expect(out.rename).toBe("renamed");
+		const path = "KOReader/Gabriel Wyner - Designing Data-Intensive Applications.md";
+		expect(out.path).toBe(path);
+		const content = vault.content(path);
+		expect(content).toContain("# Designing Data-Intensive Applications");
+		expect(content).toContain('book: "Fluent Forever"'); // raw provenance stays
+		expect(content).toContain('title_override: "Designing Data-Intensive Applications"');
+		// source key unchanged by rename
+		const src = content.match(/source: "(.*)"/)![1];
+		expect(src).toMatch(/^koreader:\/\//);
+
+		// renamed note keeps being found by identity, and overrides survive regeneration
+		const again = await store.sync(payload(true));
+		expect(again.action).toBe("updated");
+		expect(again.path).toBe(path);
+		expect(vault.content(path)).toContain('title_override: "Designing Data-Intensive Applications"');
+	});
+
+	it("rename never fights over an occupied target path", async () => {
+		const vault = new FakeVault();
+		const store = new VaultNoteStore(vault.app(), OPTIONS, () => new Date("2026-10-28T12:00:00.000Z"));
+
+		await store.sync(payload());
+		writeFrontmatterField(vault, baseName, "title_override", "Designing Data-Intensive Applications");
+		// another note already sits at the exact target name
+		await vault.app().vault.create("KOReader/Gabriel Wyner - Designing Data-Intensive Applications.md", "someone else's note");
+
+		const out = await store.syncDetailed(payload());
+		expect(out.rename).toBe("target-taken");
+		expect(out.path).toBe(baseName);
+	});
 });
+
+/** Mimics the command's processFrontMatter write. */
+function writeFrontmatterField(vault: FakeVault, file: string, key: string, value: string): void {
+	const content = vault.content(file);
+	const next = content.replace(/^(---\n)/, `$1${key}: ${JSON.stringify(value)}\n`);
+	vault.set(file, next);
+}

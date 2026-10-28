@@ -3,9 +3,11 @@ import * as http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { KoNotesPayload, NoteStore } from "./protocol";
 import { validatePayload } from "./protocol";
+import { PairingManager, generateDeviceToken } from "./pairing";
 
 const SYNC_PATH = "/kosync/v1/sync";
 const PING_PATH = "/kosync/v1/ping";
+const PAIR_PATH = "/kosync/v1/pair/confirm";
 const MAX_BODY = 10 * 1024 * 1024; // 10 MB, per PROTOCOL.md
 const VERSION = 1;
 
@@ -25,11 +27,20 @@ export class KoNotesServer {
 
 	/** Fires from request handling (not on start/stop errors, which reject). */
 	onHook: ((hook: ServerHook) => void) | null = null;
+	/** Pairing window; routing to /pair/confirm refuses when unset or no session. */
+	pairing: PairingManager | null = null;
+	/** Called on successful pairing, before the response — must persist the token. */
+	onPairDevice: ((name: string, token: string) => Promise<void>) | null = null;
 
 	constructor(private store: NoteStore) {}
 
 	get isRunning(): boolean {
 		return this.server !== null;
+	}
+
+	/** Refreshes the token allowlist without closing the socket (used when pairing succeeds). */
+	setTokens(tokens: readonly string[]): void {
+		this.tokens = new Set(tokens.map((t) => t.trim()).filter((t) => t.length > 0));
 	}
 
 	/** Bound port (for tests), or null when not running. */
@@ -66,6 +77,37 @@ export class KoNotesServer {
 			s.closeAllConnections();
 			s.close(() => resolve());
 		});
+	}
+
+	private async handlePair(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (req.method !== "POST") {
+			res.setHeader("Allow", "POST");
+			return send(res, 405, { ok: false, error: "pair/confirm expects POST" });
+		}
+		if (!this.pairing || !this.onPairDevice) {
+			return send(res, 403, { ok: false, error: "pairing is not active; start it in the koNotes settings" });
+		}
+		const { body, error, tooLarge } = await this.readJson(req);
+		if (tooLarge) return send(res, 413, { ok: false, error: `body exceeds ${MAX_BODY} bytes` });
+		if (error !== undefined) return send(res, 400, { ok: false, error });
+
+		const b = body as Record<string, unknown>;
+		if (typeof b["code"] !== "string") return send(res, 400, { ok: false, error: "code is required" });
+		const name = typeof b["name"] === "string" && b["name"].trim() !== "" ? b["name"].trim() : "KOReader device";
+
+		switch (this.pairing.confirm(b["code"])) {
+			case "ok": {
+				const token = generateDeviceToken();
+				await this.onPairDevice(name, token);
+				this.onHook?.({ kind: "synced", action: "paired", path: name });
+				return send(res, 200, { ok: true, token: token });
+			}
+			case "wrong":
+				return send(res, 403, { ok: false, error: "wrong pairing code" });
+			case "inactive":
+			case "expired":
+				return send(res, 403, { ok: false, error: "pairing code invalid or expired" });
+		}
 	}
 
 	private authorized(req: IncomingMessage): boolean {
@@ -112,6 +154,9 @@ export class KoNotesServer {
 		if (path === PING_PATH) {
 			if (req.method !== "GET") return send(res, 405, { ok: false, error: "ping expects GET" });
 			return send(res, 200, { ok: true, plugin: "koNotes", version: VERSION });
+		}
+		if (path === PAIR_PATH) {
+			return await this.handlePair(req, res);
 		}
 		if (path !== SYNC_PATH) return send(res, 404, { ok: false, error: "unknown path" });
 		if (req.method !== "POST") {

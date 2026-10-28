@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { KoNotesServer } from "../src/server";
+import { PairingManager, PAIRING_TTL_MS } from "../src/pairing";
 import type { KoNotesPayload, NoteStore, SyncResult } from "../src/protocol";
 import { readFileSync } from "fs";
 import * as path from "path";
@@ -104,5 +105,46 @@ describe("sync body handling", () => {
 		const res = await postFixture();
 		expect(res.status).toBe(500);
 		expect((await res.json())).toMatchObject({ ok: false, error: "disk full" });
+	});
+});
+
+describe("pairing", () => {
+	const pairPost = (body: unknown) =>
+		fetch(url + "/kosync/v1/pair/confirm", { method: "POST", body: JSON.stringify(body) });
+
+	it("refuses when no pairing window is open", async () => {
+		server.pairing = null;
+		expect((await pairPost({ code: "123456", name: "x" })).status).toBe(403);
+	});
+
+	it("issues a token for the right code and registers it before answering", async () => {
+		server.pairing = new PairingManager();
+		const registered: Array<[string, string]> = [];
+		server.onPairDevice = async (name, token) => {
+			expect(token).toMatch(/^kn_[a-z0-9]{40}$/);
+			registered.push([name, token]);
+		};
+		const code = server.pairing.start();
+		const wrong = await pairPost({ code: code === "000000" ? "000001" : "000000", name: "dd" });
+		expect(wrong.status).toBe(403);
+		const ok = await pairPost({ code: code, name: "PBVerseProColor" });
+		expect(ok.status).toBe(200);
+		const body = (await ok.json()) as { token: string };
+		expect(body.token).toMatch(/^kn_/);
+		expect(registered).toEqual([["PBVerseProColor", body.token]]);
+		// the session is consumed — the same code can't pair twice
+		expect((await pairPost({ code: code, name: "again" })).status).toBe(403);
+	});
+
+	it("expires and rate-limits via the manager", () => {
+		let now = 0;
+		const pm = new PairingManager();
+		const code = pm.start(now);
+		expect(code).toMatch(/^\d{6}$/);
+		expect(pm.confirm("000000", now + 1)).toBe("wrong"); // burn 1
+		expect(pm.state(now + 1)).toMatchObject({ active: true, attemptsLeft: 4 });
+		for (let i = 0; i < 4; i++) pm.confirm("000000", now + 1);
+		expect(pm.confirm(code, now + 1)).toBe("inactive"); // attempts exhausted kills the window
+		expect(pm.confirm(code, now + PAIRING_TTL_MS + 1)).toBe("inactive");
 	});
 });
