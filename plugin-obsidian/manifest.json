@@ -1,0 +1,9 @@
+{
+  "id": "konotes",
+  "name": "koNotes",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Receive KOReader highlights wirelessly into your vault — one note per book.",
+  "author": "bilend",
+  "isDesktopOnly": true
+}

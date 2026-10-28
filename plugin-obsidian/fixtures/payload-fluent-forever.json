@@ -1,0 +1,34 @@
+{
+  "device": { "name": "Vivlio InkPad 4" },
+  "book": {
+    "path": "/mnt/onboard/books/fluent_forever.epub",
+    "title": "Fluent Forever",
+    "author": "Gabriel Wyner",
+    "pages": 352,
+    "percent_finished": 0.62
+  },
+  "annotations": [
+    {
+      "datetime": "2026-10-26T21:03:11",
+      "page": "24",
+      "chapter": "Sound First",
+      "text": "The sound of a word, first spoken\nout loud, ...",
+      "note": null
+    },
+    {
+      "datetime": "2026-10-26T21:22:43",
+      "page": "36",
+      "chapter": "Sound First",
+      "text": "",
+      "note": "Persistence beats intensity."
+    },
+    {
+      "datetime": "2026-10-27T10:02:00",
+      "datetime_updated": "2026-10-27T10:04:00",
+      "page": "108",
+      "chapter": "The Deep Bore",
+      "text": "Their tastes are similar...",
+      "note": ""
+    }
+  ]
+}

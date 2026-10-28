@@ -1,0 +1,5 @@
+plugin-obsidian/main.js
+plugin-obsidian/main.js.map
+node_modules/
+.DS_Store
+__pycache__/
