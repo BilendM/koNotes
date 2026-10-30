@@ -135,6 +135,14 @@ function KonotesExporter:doPair(code_input)
         })
         return
     end
+    if not NetworkMgr:isOnline() then
+        -- diagnostic honesty: the reader's radio auto-off was indistinguishable
+        -- from "no server answered" (wasted a whole debugging round, 2026-10-30)
+        UIManager:show(InfoMessage:new {
+            text = _("koNotes: Wi-Fi is off. Turn Wi-Fi on and pair again."),
+        })
+        return
+    end
     UIManager:show(InfoMessage:new {
         text = _("koNotes: searching for the server on the local network…"),
         timeout = 5,
