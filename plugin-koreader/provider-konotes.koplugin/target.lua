@@ -45,28 +45,61 @@ See the koNotes plugin's PROTOCOL.md for details.]]),
 -- ---- discovery ---------------------------------------------------------------
 
 -- One broadcast; returns host, port or nil on silence. Never errors.
+-- Robustness notes (2026-10-30 pairing debugging):
+-- - setoption("broadcast") is best-effort: some kernels reject it, and it is
+--   only required to *send* to the limited broadcast address.
+-- - Two datagrams: 255.255.255.255 (limited broadcast) and the subnet-directed
+--   broadcast (x.y.z.255 from the device's own IP) — routers/APs commonly pass
+--   the latter but not the former.
+-- - The receive loop tolerates the remaining-timeout going ~0 at the deadline.
 function KonotesExporter:discoverHost()
     local ok, host, port = pcall(function()
         local s = socket.udp()
-        s:settimeout(0.5)
-        s:setoption("broadcast", true)
         local id = tostring(math.random(10000, 99999))
-        s:sendto(rapidjson.encode({ konotes = "discover", id = id }), "255.255.255.255", DISCOVERY_PORT)
+        local addrs = { "255.255.255.255" }
+        local function pick_scope()
+            -- learn our own address through a connect() trick, then assume /24
+            local probe = socket.udp()
+            probe:settimeout(0.1)
+            local ho = probe:setpeername("8.8.8.8", 80) -- route pin only; no DNS round-trip expected
+            local self_ip = ho and tostring(probe:getsockname()) or nil
+            probe:close()
+            local netpart = self_ip and self_ip:match("^(%d+%.%d+%.%d+%.)")
+            if netpart and netpart ~= "255.255.255." then
+                local directed = netpart .. "255"
+                -- send subnet-directed first: many APs pass it while dropping limited broadcast
+                table.insert(addrs, 1, directed)
+            end
+        end
+        pick_scope()
+        for _i, addr in ipairs(addrs) do
+            local sent = pcall(function()
+                if addr == "255.255.255.255" then
+                    s:setoption("broadcast", true)
+                end
+                s:sendto(rapidjson.encode({ konotes = "discover", id = id }), addr, DISCOVERY_PORT)
+            end)
+            if not sent then
+                logger.warn("koNotes: broadcast to", addr, "failed")
+            end
+        end
+        s:settimeout(0.5)
         local deadline = socket.gettime() + DISCOVERY_TIMEOUT
-        while socket.gettime() < deadline do
-            s:settimeout(deadline - socket.gettime())
+        local result_host, result_port
+        repeat
+            local later = deadline - socket.gettime()
+            s:settimeout(later > 0.05 and later or 0.05)
             local data, addr = s:receive()
             if data then
                 local offer = rapidjson.decode(data)
                 if type(offer) == "table" and offer.konotes == "offer" and offer.id == id
                         and type(offer.port) == "number" and addr then
-                    s:close()
-                    return addr, offer.port
+                    result_host, result_port = addr, offer.port
                 end
             end
-        end
+        until result_host or socket.gettime() >= deadline
         s:close()
-        return nil
+        return result_host, result_port
     end)
     if not ok then
         logger.warn("koNotes: discovery failed", host)

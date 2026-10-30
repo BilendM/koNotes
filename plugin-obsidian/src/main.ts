@@ -119,12 +119,18 @@ export default class KoNotesPlugin extends Plugin {
 		this.updateStatusBar();
 	}
 
-	/** start/stop/restart so the running server always matches settings; notices on change. */
+	/** start/stop/restart so the running server always matches settings; notices on change.
+	 *  Enable alone keeps the server up even with zero tokens: sync requests are refused
+	 *  (401) but the pairing endpoint must be able to run — otherwise a fresh install
+	 *  has no running server to pair with (observed 2026-10-30). */
 	private async applyServerState(): Promise<void> {
-		const want = this.settings.serverEnabled && allTokens(this.settings).length > 0;
+		const want = this.settings.serverEnabled;
 		const unchanged =
 			this.server.isRunning && this.runningPort === this.settings.port && this.runningTokens === this.settings.deviceTokens;
-		if (want && unchanged) return;
+		if (want && unchanged) {
+			this.server.setTokens(allTokens(this.settings));
+			return;
+		}
 		if (want) {
 			await this.startServer();
 			new Notice(`koNotes: listening on port ${this.settings.port}`);
@@ -132,7 +138,6 @@ export default class KoNotesPlugin extends Plugin {
 			await this.stopServer();
 			new Notice("koNotes: sync server stopped");
 		} else {
-			this.server.setTokens(allTokens(this.settings));
 			this.updateStatusBar();
 		}
 	}
@@ -153,11 +158,11 @@ export default class KoNotesPlugin extends Plugin {
 			return;
 		}
 		if (!this.server.isRunning) {
-			const want = this.settings.serverEnabled;
+			// pairing needs a live server (the UDP responder answers its broadcasts),
+			// even with no tokens yet — that's the whole point of cold-start pairing.
 			this.settings.serverEnabled = true;
 			try {
 				await this.startServer();
-				if (want) await this.saveSettings();
 			} catch (e) {
 				new Notice("koNotes: " + (e instanceof Error ? e.message : String(e)));
 				return;
