@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  plugin-obsidian:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin-obsidian
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+  plugin-koreader:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin-koreader/provider-konotes.koplugin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua (apt first, Homebrew fallback)
+        run: |
+          sudo apt-get update && sudo apt-get install -y lua5.4 || brew install lua
+          echo "LUA_BIN=$(command -v lua || command -v lua5.4)" >> $GITHUB_ENV
+      - name: Syntax check all Lua files
+        run: |
+          for f in main.lua target.lua payload.lua _meta.lua; do
+            "$LUA_BIN" -e "assert(loadfile('$f'));"
+          done
+      - name: Payload spec
+        run: "$LUA_BIN" spec/payload_test.lua
