@@ -1,5 +1,14 @@
 # koNotes — Wireless KOReader → Obsidian Highlights Sync
 
+> **STATUS 2026-10-30: v1.1 shipped.** M0–M4 complete and dogfood-verified on a
+> PocketBook Vivlio (discovery + 6-digit pairing + auto-sync on close + display
+> overrides). This document is the original design record — see
+> [README](README.md) for current docs and [PROTOCOL.md](PROTOCOL.md) for the
+> v1.1 contract. Backlog store-submission: follow Obsidian community review
+> guidelines (no eval — satisfied, server lifecycle hygiene — satisfied,
+> graceful port-conflict handling — satisfied via port auto-bump) and open the
+> one-file PR to `obsidianmd/obsidian-releases`. Defer until demand warrants.
+
 > Working title `koSync` — renamed because KOReader already ships a built-in plugin named **KOSync** (progress sync vs. `koreader-sync-server`). Proposed name: **koNotes** (alternatives: *koread-bridge*, *InkImport*). KOReader-side plugin id: `provider-konotes.koplugin`, keeping it distinct from KOSync in plugin menus.
 
 ## Goal
