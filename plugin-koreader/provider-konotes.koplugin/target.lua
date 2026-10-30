@@ -24,7 +24,6 @@ local T = require("ffi/util").template
 local Payload = require("payload")
 
 local DISCOVERY_PORT = 41838
-local DISCOVERY_TIMEOUT = 2 -- seconds listening for an offer
 
 -- BaseExporter lives in exporter.koplugin and resolves to its base.lua via
 -- KOReader's plugin package.path injection (same mechanism as flomo/memos).
@@ -44,19 +43,23 @@ See the koNotes plugin's PROTOCOL.md for details.]]),
 
 -- ---- discovery ---------------------------------------------------------------
 
--- One broadcast; returns host, port or nil on silence. Never errors.
+-- One discovery attempt: broadcast first, then a unicast sweep of the /24.
+-- Returns host, port or nil on silence. Never errors.
 -- Robustness notes (2026-10-30 pairing debugging):
 -- - setoption("broadcast") is best-effort: some kernels reject it, and it is
 --   only required to *send* to the limited broadcast address.
--- - Two datagrams: 255.255.255.255 (limited broadcast) and the subnet-directed
---   broadcast (x.y.z.255 from the device's own IP) — routers/APs commonly pass
---   the latter but not the former.
+-- - Routers commonly do NOT forward broadcast Wi-Fi↔wired (observed with a
+--   wired Mac + Wi-Fi e-reader), so after the broadcast window we sweep every
+--   host of the /24 with unicast datagrams: cheap, and only a live koNotes
+--   responder answers, identified by its echoed id.
 -- - The receive loop tolerates the remaining-timeout going ~0 at the deadline.
 function KonotesExporter:discoverHost()
     local ok, host, port = pcall(function()
         local s = socket.udp()
         local id = tostring(math.random(10000, 99999))
+        local message = rapidjson.encode({ konotes = "discover", id = id })
         local addrs = { "255.255.255.255" }
+        local netpart = nil
         local function pick_scope()
             -- learn our own address through a connect() trick, then assume /24
             local probe = socket.udp()
@@ -64,11 +67,10 @@ function KonotesExporter:discoverHost()
             local ho = probe:setpeername("8.8.8.8", 80) -- route pin only; no DNS round-trip expected
             local self_ip = ho and tostring(probe:getsockname()) or nil
             probe:close()
-            local netpart = self_ip and self_ip:match("^(%d+%.%d+%.%d+%.)")
+            netpart = self_ip and self_ip:match("^(%d+%.%d+%.%d+%.)")
             if netpart and netpart ~= "255.255.255." then
-                local directed = netpart .. "255"
-                -- send subnet-directed first: many APs pass it while dropping limited broadcast
-                table.insert(addrs, 1, directed)
+                -- subnet-directed first: many APs pass it while dropping limited broadcast
+                table.insert(addrs, 1, netpart .. "255")
             end
         end
         pick_scope()
@@ -77,27 +79,39 @@ function KonotesExporter:discoverHost()
                 if addr == "255.255.255.255" then
                     s:setoption("broadcast", true)
                 end
-                s:sendto(rapidjson.encode({ konotes = "discover", id = id }), addr, DISCOVERY_PORT)
+                s:sendto(message, addr, DISCOVERY_PORT)
             end)
             if not sent then
                 logger.warn("koNotes: broadcast to", addr, "failed")
             end
         end
-        s:settimeout(0.5)
-        local deadline = socket.gettime() + DISCOVERY_TIMEOUT
-        local result_host, result_port
-        repeat
-            local later = deadline - socket.gettime()
-            s:settimeout(later > 0.05 and later or 0.05)
-            local data, addr = s:receive()
-            if data then
-                local offer = rapidjson.decode(data)
-                if type(offer) == "table" and offer.konotes == "offer" and offer.id == id
-                        and type(offer.port) == "number" and addr then
-                    result_host, result_port = addr, offer.port
+        -- drop early broadcast replies before/while sweeping
+        local function listenForOffer(seconds)
+            local deadline = socket.gettime() + math.max(seconds, 0.05)
+            repeat
+                s:settimeout(math.max(deadline - socket.gettime(), 0.05))
+                local data, addr = s:receive()
+                if data then
+                    local offer = rapidjson.decode(data)
+                    if type(offer) == "table" and offer.konotes == "offer" and offer.id == id
+                            and type(offer.port) == "number" and addr then
+                        return addr, offer.port
+                    end
                 end
+            until socket.gettime() >= deadline
+            return nil
+        end
+        local result_host, result_port = listenForOffer(0.7)
+        if not result_host and netpart then
+            logger.dbg("koNotes: no broadcast offer — sweeping", netpart .. "0/24")
+            -- every host: unmatched listeners just stay silent (no ICMP round-trip needed)
+            for oct = 1, 254 do
+                pcall(function()
+                    s:sendto(message, netpart .. oct, DISCOVERY_PORT)
+                end)
             end
-        until result_host or socket.gettime() >= deadline
+            result_host, result_port = listenForOffer(1.5)
+        end
         s:close()
         return result_host, result_port
     end)
@@ -121,6 +135,10 @@ function KonotesExporter:doPair(code_input)
         })
         return
     end
+    UIManager:show(InfoMessage:new {
+        text = _("koNotes: searching for the server on the local network…"),
+        timeout = 5,
+    })
     local host, port = self:discoverHost()
     if not host then
         UIManager:show(InfoMessage:new {
